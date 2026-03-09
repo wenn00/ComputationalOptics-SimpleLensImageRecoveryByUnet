@@ -1,0 +1,25 @@
+data:
+  gopro_root: ./GOPRO_Large
+  custom_root: ./data/custom
+  val_sequences: [GOPR0871_11_01, GOPR0881_11_00]  # Fixed val split
+  patch_size: 256
+
+training:
+  batch_size: 8
+  grad_accumulation: 1       # effective batch = batch_size * grad_accumulation
+  lr: 0.0001
+  epochs: 200
+  early_stop_patience: 20
+  seed: 42
+  use_ssim_loss: false       # Start with L1 only, enable later
+  ssim_weight: 0.1
+
+model:
+  channels: [64, 128, 256, 512]
+  bottleneck: 512
+
+save:
+  checkpoint_interval: 10
+  log_dir: ./runs
+
+device: auto                  # auto -> CUDA -> MPS -> CPU
