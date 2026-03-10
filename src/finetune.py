@@ -28,6 +28,7 @@ from inference import inference_single
 from losses import CombinedLoss, compute_psnr, compute_ssim
 from model import ResidualUNet
 from train import get_device, load_config, set_seed
+from visualize import plot_training_curves
 
 
 def save_comparison_images(
@@ -169,6 +170,9 @@ def finetune(config: dict, checkpoint_path: str):
 
     best_psnr = 0.0
 
+    # Track metrics for plotting
+    history = {"train_loss": [], "val_psnr": [], "val_ssim": []}
+
     # ---- Training loop ----
     for epoch in range(1, finetune_epochs + 1):
         model.train()
@@ -214,6 +218,10 @@ def finetune(config: dict, checkpoint_path: str):
         print(f"Epoch {epoch} | Loss: {avg_loss:.4f} | "
               f"Val PSNR: {val_psnr:.2f} | Val SSIM: {val_ssim:.4f}")
 
+        history["train_loss"].append(avg_loss)
+        history["val_psnr"].append(val_psnr)
+        history["val_ssim"].append(val_ssim)
+
         # ---- Save best model ----
         if val_psnr > best_psnr:
             best_psnr = val_psnr
@@ -245,6 +253,10 @@ def finetune(config: dict, checkpoint_path: str):
         checkpoint_dir / "finetune_final.pth",
     )
     print(f"Fine-tuning complete. Best val PSNR: {best_psnr:.2f}")
+
+    # ---- Generate training curves ----
+    curves_dir = PROJECT_ROOT / "results" / "finetune_curves"
+    plot_training_curves(history, curves_dir)
 
     # ---- Generate comparison images with best model ----
     best_ckpt = torch.load(
