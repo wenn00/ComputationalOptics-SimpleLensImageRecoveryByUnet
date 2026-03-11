@@ -10,7 +10,7 @@ AI-based image deblurring using a Residual UNet architecture. Pretrained on the 
 - [Training](#training)
 - [Monitoring Training Progress](#monitoring-training-progress)
 - [Inference](#inference)
-- [Fine-tuning with Custom Data (Future)](#fine-tuning-with-custom-data-future)
+- [Fine-tuning with Custom Data](#fine-tuning-with-custom-data)
 - [Project Structure](#project-structure)
 - [Configuration Reference](#configuration-reference)
 - [Troubleshooting](#troubleshooting)
@@ -23,7 +23,7 @@ This project trains a **Residual UNet** neural network to remove motion blur fro
 
 **Two-phase strategy:**
 1. **Pretrain** on GOPRO_Large (~2100 blur/sharp pairs from high-speed camera footage)
-2. **Fine-tune** on custom Raspberry Pi camera data (future, when paired data is collected)
+2. **Fine-tune** on custom Raspberry Pi camera data with synthetic Gaussian blur
 
 **Supported hardware:**
 - NVIDIA GPU with CUDA (recommended: RTX 3080 or above for full training)
@@ -286,33 +286,91 @@ For images larger than the training patch size (256×256), the inference script 
 
 ---
 
-## Fine-tuning with Custom Data (Future)
+## Fine-tuning with Custom Data
 
-> **Note:** This step requires paired blur/sharp data from the Raspberry Pi camera, which is not yet available.
+We captured 1,132 clear photos (1280×720 PNG) with a Raspberry Pi camera. Since there are no corresponding blurry photos, we synthetically apply Gaussian blur to the clear photos and use them as ground truth for supervised fine-tuning.
 
-### Prepare custom data
+### Step 1: Download sharp images
 
-Place paired images in the following structure:
+Download the sharp photos from Google Drive and place them in `data/custom/sharp/`:
+
+**Google Drive link:** https://drive.google.com/drive/u/0/folders/1yJI8A7MBEV-OhfcRVaK9vbMNpVlM4I_G
 
 ```
 data/custom/
-├── blur/
-│   ├── 001.png
-│   ├── 002.png
-│   └── ...
 └── sharp/
-    ├── 001.png    # Must have matching filenames
-    ├── 002.png
-    └── ...
+    ├── img_20260306_160805_464313.png
+    ├── img_20260306_160806_567479.png
+    └── ...  (1,132 images total)
 ```
 
-### Run fine-tuning
+Verify:
+
+```bash
+ls data/custom/sharp/*.png | wc -l    # Should print 1132
+```
+
+### Step 2: Generate synthetic blur images
+
+```bash
+python src/generate_blur.py --sigma_min 1.0 --sigma_max 5.0 --seed 42
+```
+
+This applies random Gaussian blur (sigma ∈ [1.0, 5.0]) with light noise to each sharp image and saves to `data/custom/blur/`. The seed is fixed, so everyone gets identical results.
+
+**Options:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--sigma_min` | `1.0` | Minimum blur sigma |
+| `--sigma_max` | `5.0` | Maximum blur sigma |
+| `--noise` / `--no-noise` | `--noise` | Add light Gaussian noise (sigma=2/255) |
+| `--seed` | `42` | Random seed for reproducibility |
+
+### Step 3: Run fine-tuning
 
 ```bash
 python src/finetune.py --checkpoint checkpoints/best.pth
 ```
 
-This loads the GOPRO-pretrained model and fine-tunes it on your custom data with a lower learning rate (1e-5) for 50 epochs.
+This loads the GOPRO-pretrained model and fine-tunes on the custom data:
+
+- **Train/Val split:** 90% train / 10% val (deterministic, seed-based)
+- **Learning rate:** 1e-5 (10× lower than pretraining)
+- **Epochs:** 50 with CosineAnnealingLR
+- **Loss:** L1 + 0.1 × (1 − SSIM)
+- **Best model:** Saved to `checkpoints/finetune_best.pth` (highest Val PSNR)
+
+**After training completes, the following are generated automatically:**
+
+```
+results/
+├── finetune_curves/
+│   ├── training_overview.png    # Loss + PSNR + SSIM in one figure
+│   ├── loss_curve.png
+│   ├── psnr_curve.png
+│   └── ssim_curve.png
+└── finetune_samples/
+    ├── comparison_1.png         # Side-by-side: Blurry | Deblurred | Sharp (GT)
+    ├── comparison_2.png
+    ├── comparison_3.png
+    ├── comparison_4.png
+    └── comparison_5.png
+```
+
+### Step 4: Inference (optional)
+
+To deblur additional images using the fine-tuned model:
+
+```bash
+python src/inference.py --input path/to/blurry.png --output path/to/result.png --checkpoint checkpoints/finetune_best.pth
+```
+
+Or batch process an entire folder:
+
+```bash
+python src/inference.py --input data/custom/blur/ --output results/finetune_output/ --checkpoint checkpoints/finetune_best.pth
+```
 
 ---
 
@@ -325,17 +383,20 @@ This loads the GOPRO-pretrained model and fine-tunes it on your custom data with
 │   ├── model.py             # Residual UNet architecture (19.2M parameters)
 │   ├── dataset.py           # GOPRO and custom dataset loaders
 │   ├── losses.py            # L1 + SSIM loss functions, PSNR/SSIM metrics
-│   ├── train.py             # Main training script
-│   ├── finetune.py          # Fine-tuning script (for future RPi data)
+│   ├── train.py             # Main training script (GOPRO pretrain)
+│   ├── finetune.py          # Fine-tuning script (custom RPi data)
+│   ├── generate_blur.py     # Synthetic Gaussian blur generation
 │   ├── inference.py         # Inference script (single image + batch)
 │   └── visualize.py         # Training curve plots and sample image generation
 ├── GOPRO_Large/             # Dataset (not in git, download separately)
 ├── checkpoints/             # Saved model weights (not in git)
 ├── results/
-│   ├── curves/              # Training metric plots (auto-generated)
-│   └── samples/             # Sample comparison images (auto-generated)
+│   ├── curves/              # Pretrain metric plots (auto-generated)
+│   ├── samples/             # Pretrain sample images (auto-generated)
+│   ├── finetune_curves/     # Fine-tune metric plots (auto-generated)
+│   └── finetune_samples/    # Fine-tune comparison images (auto-generated)
 ├── runs/                    # TensorBoard logs (not in git)
-├── data/custom/             # Custom RPi paired data (future)
+├── data/custom/             # Custom RPi data (not in git, see Fine-tuning section)
 ├── requirements.txt         # Python dependencies (excluding PyTorch)
 ├── .gitignore
 └── README.md
